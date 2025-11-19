@@ -145,6 +145,9 @@ var panPositions = [4,4,4,4,4,4,4,4];  // Track actual pad positions
 // Track send values (0..1)
 var sendValues = [0,0,0,0,0,0,0,0];
 var sendPositions = [0,0,0,0,0,0,0,0];  // Track actual pad positions
+// Track device (Quick Controls) values (0..1)
+var deviceValues = [0,0,0,0,0,0,0,0];
+var deviceSteps = [0,0,0,0,0,0,0,0];  // Track actual pad steps
 // Track visible pad state per column: array of 8 colors (or LED_OFF) for each col
 var padColumnState = [
     [0,0,0,0,0,0,0,0],
@@ -237,7 +240,7 @@ function updatePanRow(context, rowIndex, panValue) {
     padColumnState[rowIndex] = newState;
 }
 
-// Update send row display: dim yellow background with red indicator
+// Update send row display: yellow background with orange indicator
 // rowIndex: which row (0-7) to update for this channel
 // sendValue: 0..1 where 0 is left, 1 is right
 function updateSendRow(context, rowIndex, sendValue) {
@@ -245,26 +248,22 @@ function updateSendRow(context, rowIndex, sendValue) {
         sendValue = sendValues[rowIndex] || 0;
     }
     
-    // Calculate send position (0-7 pads)
     var sendPos = Math.max(0, Math.min(7, Math.floor(sendValue * 8)));
     
-    // Skip if position hasn't changed
     if (sendPos === sendPositions[rowIndex]) return;
     sendPositions[rowIndex] = sendPos;
     
     var prevState = padColumnState[rowIndex];
     var newState = [];
     
-    // Fill row: dim yellow background, red at send position
     for (var col = 0; col < 8; col++) {
         if (col === sendPos) {
-            newState[col] = LED_RED;  // Red indicator at send position
+            newState[col] = LED_ORANGE;
         } else {
-            newState[col] = LED_YELLOW;  // Dim yellow background
+            newState[col] = LED_YELLOW;
         }
     }
     
-    // Send MIDI only for changed pads
     for (var col = 0; col < 8; col++) {
         if (newState[col] !== prevState[col]) {
             var note = rowIndex * 8 + col;
@@ -272,7 +271,40 @@ function updateSendRow(context, rowIndex, sendValue) {
         }
     }
     
-    // Update stored state
+    padColumnState[rowIndex] = newState;
+}
+
+// Update device (Quick Controls) row display: purple/magenta horizontal bars
+function updateDeviceRow(context, rowIndex, value) {
+    if (typeof value === 'undefined') {
+        value = deviceValues[rowIndex] || 0;
+    }
+    
+    var steps = Math.max(0, Math.min(8, Math.floor(value * 8)));
+    if (steps === deviceSteps[rowIndex]) return;
+    deviceSteps[rowIndex] = steps;
+
+    var prevState = padColumnState[rowIndex];
+    var newState = [];
+    
+    for (var col = 0; col < 8; col++) {
+        if (col < steps) {
+            var color = 53;                    // Purple/Magenta
+            if (col >= 6) color = LED_PINK;    // Right side: bright pink
+            else color = 53;                   // Left side: purple/magenta
+            newState[col] = color;
+        } else {
+            newState[col] = LED_OFF;
+        }
+    }
+
+    for (var col = 0; col < 8; col++) {
+        if (newState[col] !== prevState[col]) {
+            var note = rowIndex * 8 + col;
+            setLed(context, note, newState[col]);
+        }
+    }
+
     padColumnState[rowIndex] = newState;
 }
 
@@ -316,8 +348,16 @@ for (var mi = 0; mi < modeButtons.length; mi++) {
             // If Send mode activated, update all send rows
             if (modeIdx === 2) {
                 for (var si = 0; si < 8; si++) {
-                    sendPositions[si] = -1;  // Force update on first display
+                    sendPositions[si] = -1;
                     updateSendRow(context, si, sendValues[si]);
+                }
+            }
+            
+            // If Device mode activated, update all device rows
+            if (modeIdx === 3) {
+                for (var qi = 0; qi < 8; qi++) {
+                    deviceSteps[qi] = -1;
+                    updateDeviceRow(context, qi, deviceValues[qi]);
                 }
             }
         };
@@ -386,15 +426,25 @@ for (var i = 0; i < 8; i++) {
     (function(index, binding) {
         binding.mOnValueChange = function(context, mapping, value) {
             sendValues[index] = value;
-            // Update the row display if we're on Send page
             if (!isDrumPageActive && activeModeButtonIndex === 2) {
                 updateSendRow(context, index, value);
             }
         };
     })(i, sendBinding);
-    page.makeValueBinding(faders[i].mSurfaceValue, page.mHostAccess.mFocusedQuickControls.getByIndex(i))
+    
+    var deviceBinding = page.makeValueBinding(faders[i].mSurfaceValue, page.mHostAccess.mFocusedQuickControls.getByIndex(i))
         .setValueTakeOverModeScaled()
         .setSubPage(subPageQC);
+    
+    // Add device value change handler to update display
+    (function(index, binding) {
+        binding.mOnValueChange = function(context, mapping, value) {
+            deviceValues[index] = value;
+            if (!isDrumPageActive && activeModeButtonIndex === 3) {
+                updateDeviceRow(context, index, value);
+            }
+        };
+    })(i, deviceBinding);
 }
 
 // Track selection buttons with LED feedback
@@ -437,15 +487,20 @@ if (faders.length > 8) {
         .setSubPage(subPageVolume);
 }
 
-// Update pad display when faders move (Volume mode only)
+// Update pad display when faders move
 for (var fi = 0; fi < 8; fi++) {
     (function(index) {
         faders[index].mSurfaceValue.mOnProcessValueChange = function(context, value, diff) {
             var oldValue = faderValues[index] || 0;
             faderValues[index] = value;
             
-            if (!isDrumPageActive && activeModeButtonIndex === 0 && Math.abs(oldValue - value) > 0.005) {
-                updatePadColumn(context, index, value);
+            if (!isDrumPageActive && Math.abs(oldValue - value) > 0.005) {
+                if (activeModeButtonIndex === 0) {
+                    updatePadColumn(context, index, value);
+                } else if (activeModeButtonIndex === 3) {
+                    deviceValues[index] = value;
+                    updateDeviceRow(context, index, value);
+                }
             }
         };
     })(fi);
