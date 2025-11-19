@@ -14,10 +14,6 @@ deviceDriver.makeDetectionUnit().detectPortPair(midiInputNotes, midiOutputNotes)
 var surface = deviceDriver.mSurface;
 var midiChannel = 0;
 
-// Keep backward compatibility aliases
-var midiInput = midiInputNotes;
-var midiOutput = midiOutputNotes;
-
 // LED color codes (Akai spec - velocity values for pads on channel 7)
 var LED_OFF = 0;
 var LED_RED = 72;          // Bright red (0x48)
@@ -27,11 +23,9 @@ var LED_YELLOW = 74;       // Bright yellow
 var LED_CYAN = 78;         // Cyan
 var LED_ORANGE = 61;       // Orange
 var LED_PURPLE = 67;       // Purple
-var LED_BROWN = 83;        // Brown
 var LED_WHITE = 3;         // White
 var LED_PINK = 95;         // Pink
 var LED_AMBER = 96;        // Amber
-var LED_TURQUOISE = 33;    // Turquoise
 var LED_BLINK = 2;         // Flash (for channel 1 buttons)
 
 // Dimensions
@@ -62,33 +56,11 @@ function makeMatrixPad(note) {
         .setInputPort(midiInputControl)
         .bindToNote(midiChannel, note);
 
-    // This handler applies to all pages - different behavior for main vs drum page
+    // Handle pad press/release for drum page
     pad.mSurfaceValue.mOnProcessValueChange = function(context, value) {
-        // Check if we're on the drum page
         if (isDrumPageActive) {
-            // Drum page: show 4x4 block colors, change when pressed
             var drumInfo = drumMap[note];
-            if (value > 0) {
-                setLed(context, note, drumInfo.pressColor); // Trigger color
-            } else {
-                setLed(context, note, drumInfo.color); // Base block color
-            }
-        } else {
-            // Main page: row-based colors for testing
-            var color = LED_OFF;
-            if (value > 0) {
-                switch (row) {
-                    case 0: color = LED_GREEN; break;
-                    case 1: color = LED_YELLOW; break;
-                    case 2: color = LED_RED; break;
-                    case 3: color = LED_BLUE; break;
-                    case 4: color = LED_PURPLE; break;
-                    case 5: color = LED_WHITE; break;
-                    case 6: color = LED_CYAN; break;
-                    case 7: color = LED_AMBER; break;
-                }
-            }
-            setLed(context, note, color);
+            setLed(context, note, value > 0 ? drumInfo.pressColor : drumInfo.color);
         }
     };
 
@@ -141,7 +113,10 @@ for (var r = 0; r < 8; r++) rowButtons.push(makeRowButton(r));
 for (var c = 0; c < 9; c++) colButtons.push(makeColumnButton(c));
 for (var f = 0; f < 9; f++) faders.push(makeFader(f));
 
-// Mapping
+// ============================================
+// MAIN PAGE SETUP (VOLUME)
+// ============================================
+
 var page = deviceDriver.mMapping.makePage('VOLUME');
 var hostMixerBankZone = page.mHostAccess.mMixConsole.makeMixerBankZone().excludeInputChannels().excludeOutputChannels();
 var mainOutputChannel = page.mHostAccess.mMixConsole.makeMixerBankZone('Stereo Out').includeOutputChannels().makeMixerBankChannel();
@@ -152,7 +127,6 @@ var pageDrums;
 // Subpages
 var subPageAreaFunctionMode = page.makeSubPageArea('Function Mode');
 var subPageVolume = subPageAreaFunctionMode.makeSubPage('Volume');
-var subPageVU = subPageAreaFunctionMode.makeSubPage('VU Meters');
 var subPagePan = subPageAreaFunctionMode.makeSubPage('Pan');
 var subPageSend = subPageAreaFunctionMode.makeSubPage('Send');
 var subPageQC = subPageAreaFunctionMode.makeSubPage('Device');
@@ -162,12 +136,8 @@ var subPageFuncShift = subPageAreaFunctionMode.makeSubPage('Shift');
 var activeModeButtonIndex = 0;
 var modeButtons = [subPageVolume, subPagePan, subPageSend, subPageQC];
 
-// Keep last-known fader values (0..1) so we can render pad column meters
+// Track fader positions and states
 var faderValues = [0,0,0,0,0,0,0,0];
-// Track VU meter values and steps
-var vuMeterValues = [0,0,0,0,0,0,0,0];
-var vuMeterSteps = [0,0,0,0,0,0,0,0];
-// Track step count per column to detect actual changes (not just value jitter)
 var faderSteps = [0,0,0,0,0,0,0,0];
 // Track pan values (0..1, where 0.5 is center)
 var panValues = [0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5];
@@ -189,22 +159,6 @@ var padColumnState = [
 
 // Update LEDs for one column. Only send MIDI when step count actually changes.
 function updatePadColumn(context, colIndex, value) {
-    // If value not provided, read it directly from the host mixer channel
-    if (typeof value === 'undefined' && colIndex < mixerChannels.length) {
-        var hostVal = mixerChannels[colIndex].mValue.mVolume;
-        if (hostVal) {
-            // Try multiple methods to read the current host value
-            if (typeof hostVal.get === 'function') {
-                value = hostVal.get();
-            } else if (typeof hostVal.getValue === 'function') {
-                value = hostVal.getValue();
-            } else if (typeof hostVal.mValue === 'number') {
-                value = hostVal.mValue;
-            }
-        }
-    }
-    
-    // Fallback: use cached faderValues
     if (typeof value === 'undefined') {
         value = faderValues[colIndex] || 0;
     }
@@ -385,27 +339,21 @@ bindModeButton(rowButtons[1], subPagePan, LED_RED);
 bindModeButton(rowButtons[2], subPageSend, LED_RED);
 bindModeButton(rowButtons[3], subPageQC, LED_RED);
 
-// Navigation buttons (bottom row 4-7): up, down, left, right arrows - GREEN LED on channel 1
+// Navigation buttons (UP, DOWN, LEFT, RIGHT)
 var navActions = [
-    hostMixerBankZone.mAction.mShiftLeft,    // Left arrow
-    hostMixerBankZone.mAction.mShiftRight,   // Right arrow
-    hostMixerBankZone.mAction.mPrevBank,     // Up arrow
-    hostMixerBankZone.mAction.mNextBank      // Down arrow
+    hostMixerBankZone.mAction.mShiftLeft,
+    hostMixerBankZone.mAction.mShiftRight,
+    hostMixerBankZone.mAction.mPrevBank,
+    hostMixerBankZone.mAction.mNextBank
 ];
-// Map: rowButtons[4]=UP, [5]=DOWN, [6]=LEFT, [7]=RIGHT
-var navButtonIndices = [6, 7, 4, 5]; // LEFT, RIGHT, UP, DOWN order to match actions
+var navButtonIndices = [6, 7, 4, 5];  // LEFT, RIGHT, UP, DOWN
 for (var i = 0; i < 4; i++) {
     (function(navIdx, rowIdx, navAction) {
-        var button = rowButtons[rowIdx];
-        var note = 100 + rowIdx;  // Bottom row buttons are notes 100-107
-        
-        // Navigation actions
-        var navBinding = page.makeActionBinding(button.mSurfaceValue, navAction);
-        // LED is managed by page.mOnActivate (stays blue)
+        page.makeActionBinding(rowButtons[rowIdx].mSurfaceValue, navAction);
     })(i, navButtonIndices[i], navActions[i]);
 }
 
-// Fader bindings (explicit mixerChannels array for clarity)
+// Fader bindings for 8 channels + master
 var mixerChannels = [];
 for (var i = 0; i < 8; i++) {
     mixerChannels[i] = hostMixerBankZone.makeMixerBankChannel();
@@ -413,10 +361,7 @@ for (var i = 0; i < 8; i++) {
     var volumeBinding = page.makeValueBinding(faders[i].mSurfaceValue, mixerChannels[i].mValue.mVolume)
         .setValueTakeOverModeScaled()
         .setSubPage(subPageVolume);
-    
 
-    
-    // Pan binding with visual feedback
     var panBinding = page.makeValueBinding(faders[i].mSurfaceValue, mixerChannels[i].mValue.mPan)
         .setValueTakeOverModeScaled()
         .setSubPage(subPagePan);
@@ -452,65 +397,53 @@ for (var i = 0; i < 8; i++) {
         .setSubPage(subPageQC);
 }
 
-// Column buttons (0-7) - track selection with LED feedback
-var lastSelectionUpdate = [0, 0, 0, 0, 0, 0, 0, 0];  // Track last update time
+// Track selection buttons with LED feedback
+var lastSelectionUpdate = [0, 0, 0, 0, 0, 0, 0, 0];
 for (var i = 0; i < 8; i++) {
     (function(index, button) {
-        // Bind to track selection - LED feedback handled by the binding
-        // Set to Volume subpage so it only works on main page, not drum page
         var binding = page.makeValueBinding(button.mSurfaceValue, mixerChannels[index].mValue.mSelected)
             .setSubPage(subPageVolume);
         
-        // LED feedback based on host value (track selection state)
         binding.mOnValueChange = function(context, mapping, value) {
-            // Debounce: only update if enough time has passed or value actually changed
             var now = Date.now();
-            if (now - lastSelectionUpdate[index] < 50) return;  // Ignore rapid updates within 50ms
+            if (now - lastSelectionUpdate[index] < 50) return;
             lastSelectionUpdate[index] = now;
             
-            var note = 112 + index;  // Column buttons are notes 112-119
-            var velocity = value > 0 ? 1 : LED_OFF;  // Side buttons: green when track selected
-            setButtonLed(context, note, velocity);
+            var velocity = value > 0 ? 1 : LED_OFF;
+            setButtonLed(context, 112 + index, velocity);
         };
     })(i, colButtons[i]);
 }
 
-// Shift button (note 122) - create binding but override behavior for momentary action
+// Shift button - momentary activation
 var shiftBinding = page.makeActionBinding(colButtons[8].mSurfaceValue, subPageFuncShift.mAction.mActivate);
 var lastShiftValue = 0;
 shiftBinding.mOnValueChange = function(context, mapping, value) {
-    // Block shift functionality when on drum page
     if (isDrumPageActive) {
         lastShiftValue = value;
         return;
     }
     
-    // On button release, return to the active mode subpage
     if (lastShiftValue > 0 && value === 0) {
-        // Shift released - return to the active mode subpage
         modeButtons[activeModeButtonIndex].mAction.mActivate.trigger(mapping);
     }
     lastShiftValue = value;
 };
-// No LED feedback needed for shift button (it doesn't have one)
 
-// Bind the 9th fader (index 8) to the main output/master channel volume
+// Master fader binding
 if (faders.length > 8) {
     page.makeValueBinding(faders[8].mSurfaceValue, mainOutputChannel.mValue.mVolume)
         .setValueTakeOverModeScaled()
         .setSubPage(subPageVolume);
 }
 
-// Update pad columns when faders move (show meters only on main page Volume subpage)
+// Update pad display when faders move (Volume mode only)
 for (var fi = 0; fi < 8; fi++) {
     (function(index) {
         faders[index].mSurfaceValue.mOnProcessValueChange = function(context, value, diff) {
-            // Store the physical fader value
             var oldValue = faderValues[index] || 0;
             faderValues[index] = value;
             
-            // Only update display if on main page Volume subpage AND value changed significantly
-            // This prevents fader meters from showing on drum page
             if (!isDrumPageActive && activeModeButtonIndex === 0 && Math.abs(oldValue - value) > 0.005) {
                 updatePadColumn(context, index, value);
             }
@@ -518,15 +451,12 @@ for (var fi = 0; fi < 8; fi++) {
     })(fi);
 }
 
-// (subPageVolume rendering is handled in the generic subPage activation above)
-
-// Main page activation - clean up LEDs when returning from other pages
+// Main page activation
 page.mOnActivate = function(context) {
     isDrumPageActive = false; // Clear drum page flag
     
-    // Light up navigation buttons red (LEFT, RIGHT, UP, DOWN = notes 106, 107, 104, 105)
-    // Channel 1 buttons: 0=off, 1=green, 2=blink, 3-127=red
-    setButtonLed(context, 104, 3);  // UP - red
+    // Light up navigation buttons (UP, DOWN, LEFT, RIGHT)
+    setButtonLed(context, 104, 3);  // UP
     setButtonLed(context, 105, 3);  // DOWN - red
     setButtonLed(context, 106, 3);  // LEFT - red
     setButtonLed(context, 107, 3);  // RIGHT - red
@@ -540,23 +470,19 @@ page.mOnActivate = function(context) {
     }
 };
 
-// Reset all LEDs on initialization
+// Initialize device on startup
 deviceDriver.mOnActivate = function(context) {
-    // Turn off all pads (use matrix LED channel 7)
+    // Turn off all LEDs
     for (var i = 0; i < 64; i++) setLed(context, i, LED_OFF);
-    // Turn off all row buttons (use button LED channel 1)
     for (var r = 0; r < rowButtons.length; r++) setButtonLed(context, rowButtons[r].mNote, LED_OFF);
-    // Turn off all column buttons (use button LED channel 1)
     for (var c = 0; c < colButtons.length; c++) setButtonLed(context, colButtons[c].mNote, LED_OFF);
     
-    // Light up the first mode button (Volume) on startup
+    // Activate Volume mode and navigation buttons
     setButtonLed(context, rowButtons[0].mNote, LED_RED);
-    
-    // Light up navigation buttons red on startup
-    setButtonLed(context, 104, 3);  // UP - red
-    setButtonLed(context, 105, 3);  // DOWN - red
-    setButtonLed(context, 106, 3);  // LEFT - red
-    setButtonLed(context, 107, 3);  // RIGHT - red
+    setButtonLed(context, 104, 3);  // UP
+    setButtonLed(context, 105, 3);  // DOWN
+    setButtonLed(context, 106, 3);  // LEFT
+    setButtonLed(context, 107, 3);  // RIGHT
     
     // Initialize fader values to zero (will update as faders are moved)
     for (var ci = 0; ci < 8; ci++) {
@@ -565,69 +491,18 @@ deviceDriver.mOnActivate = function(context) {
 };
 
 // ============================================
-// END OF MAIN PAGE SETUP
+// DRUMS PAGE SETUP
 // ============================================
-
-// ============================================
-// GROOVE AGENT DRUMS PAGE SETUP
-// ============================================
-// Create the drum page AFTER main page is fully set up
 pageDrums = deviceDriver.mMapping.makePage('DRUMS');
 
-// CUBASE DRUM MAP (General MIDI Standard):
-// Pads send MIDI notes 0-63, organized in 4x4 color blocks
-// Use MIDI Transpose +36 to map to GM Drum notes 36-99 (C2 to D#6)
-//
-// 4x4 Color Blocks:
-// Bottom-left (RED) = Main drums - Pads 0-3, 8-11, 16-19, 24-27
-// Bottom-right (CYAN) = Cymbals/HiHats - Pads 4-7, 12-15, 20-23, 28-31
-// Top-left (YELLOW) = Percussion - Pads 32-35, 40-43, 48-51, 56-59
-// Top-right (PURPLE) = Effects/808 - Pads 36-39, 44-47, 52-55, 60-63
-//
-// Setup in Cubase:
-// 1. Load any GM-compatible drum VST
-// 2. Inspector > MIDI Modifiers > Transpose: +36 semitones
-// 3. Pads will trigger standard GM drum sounds
+// Drum map: 8x8 grid sends MIDI notes 0-63
+// Color blocks: RED (bottom-left), CYAN (bottom-right), YELLOW (top-left), PURPLE (top-right)
+// For Groove Agent: assign sounds directly to notes 0-63, or use MIDI Transpose +36
 
-// Add Shift+RIGHT navigation to switch to drum page (done here after pageDrums exists)
-var rightButton = rowButtons[7];
-var shiftDrumBinding = page.makeActionBinding(rightButton.mSurfaceValue, pageDrums.mAction.mActivate)
+// Navigation: Shift+RIGHT to drum page, LEFT to return to main page
+var shiftDrumBinding = page.makeActionBinding(rowButtons[7].mSurfaceValue, pageDrums.mAction.mActivate)
     .setSubPage(subPageFuncShift);
-// LED is managed by page.mOnActivate (stays blue)
-
-// NOTE: This page sends MIDI notes 0-63 (C-2 to B2)
-// To use with Groove Agent SE's default GM map (notes 36-99):
-// 
-// OPTION 1 - Cubase 15 Input Transformer:
-//   1. Select Groove Agent track
-//   2. Inspector > MIDI Modifiers section
-//   3. Set "Transpose" to +36 semitones (or +3 octaves)
-//
-// OPTION 2 - Manually assign in Groove Agent:
-//   1. In Groove Agent SE, load your kit
-//   2. Drag drum sounds to slots C-2 through B2 (pads will match colors)
-//
-// OPTION 3 - Use hardware Shift+Drum mode instead (sends notes 0-63 naturally)
-//
-// Color coding: Red=Kicks, Yellow=Snares, Cyan=HiHats, Purple=Toms,
-//               White=Cymbals, Orange/Brown/Amber/Pink=Percussion
-
-// Drum page setup complete - no shift subpage needed since LEFT returns directly
-
-// LEFT button returns to main page (no shift required)
 var drumLeftToMainBinding = pageDrums.makeActionBinding(rowButtons[6].mSurfaceValue, page.mAction.mActivate);
-// LED is managed by pageDrums.mOnActivate (stays green)
-
-// CUBASE DRUM MAP - 4x4 Block MIDI Organization:
-// MIDI notes organized in 4x4 blocks (NOT sequential rows)
-// Each 4x4 block sends 16 consecutive MIDI notes
-//
-// Bottom-left RED (pads 0-3,8-11,16-19,24-27) → Notes 0-15 → +36 = 36-51 (C2-D#3)
-// Bottom-right CYAN (pads 4-7,12-15,20-23,28-31) → Notes 16-31 → +36 = 52-67 (E3-G4)
-// Top-left YELLOW (pads 32-35,40-43,48-51,56-59) → Notes 32-47 → +36 = 68-83 (G#4-B5)
-// Top-right PURPLE (pads 36-39,44-47,52-55,60-63) → Notes 48-63 → +36 = 84-99 (C6-D#7)
-//
-// Map to 8x8 Groove Agent grid (notes 0-63)
 
 var drumMap = [
     // Row 0 (bottom): notes 0-7
@@ -711,19 +586,10 @@ var drumMap = [
     {note: 63, name: 'Note 63', color: LED_PURPLE, pressColor: LED_PINK}
 ];
 
-// Keep track of current drum pad states
-var drumPadStates = [];
-for (var dp = 0; dp < 64; dp++) {
-    drumPadStates[dp] = false;
-}
-
 // Flag to track which page is active
 var isDrumPageActive = false;
 
-// No bindings needed - pads will send MIDI notes via their base midiInputControl binding
-// The LED colors will be handled by updating the global mOnProcessValueChange handler
-
-// Page activation - light up all pads with their 4x4 block colors
+// Drum page activation
 pageDrums.mOnActivate = function(context) {
     isDrumPageActive = true;
     
@@ -749,9 +615,6 @@ pageDrums.mOnActivate = function(context) {
     }
 };
 
-// Page deactivation - clear flag
 pageDrums.mOnDeactivate = function(context) {
     isDrumPageActive = false;
 };
-
-// Use hardware Shift+Drum for drum/note mode
