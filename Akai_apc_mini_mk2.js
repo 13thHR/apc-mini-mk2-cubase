@@ -1,14 +1,10 @@
 var midiremote_api = require('midiremote_api_v1');
 
 var deviceDriver = midiremote_api.makeDeviceDriver('Akai', 'APC MINI MK2', '13thHouR v2');
-var midiInputControl = deviceDriver.mPorts.makeMidiInput('Control');
-var midiOutputControl = deviceDriver.mPorts.makeMidiOutput('Control');
-var midiInputNotes = deviceDriver.mPorts.makeMidiInput('Notes');
-var midiOutputNotes = deviceDriver.mPorts.makeMidiOutput('Notes');
+var midiInput = deviceDriver.mPorts.makeMidiInput();
+var midiOutput = deviceDriver.mPorts.makeMidiOutput();
 
-deviceDriver.makeDetectionUnit().detectPortPair(midiInputControl, midiOutputControl)
-    .expectSysexIdentityResponse('47', '2800', '1902');
-deviceDriver.makeDetectionUnit().detectPortPair(midiInputNotes, midiOutputNotes)
+deviceDriver.makeDetectionUnit().detectPortPair(midiInput, midiOutput)
     .expectSysexIdentityResponse('47', '2800', '1902');
 
 var surface = deviceDriver.mSurface;
@@ -31,20 +27,20 @@ var LED_BLINK = 2;         // Flash (for channel 1 buttons)
 // Dimensions
 var wPad = 2, hPad = 1, buttonSize = hPad;
 
-// Send LED update for matrix pads (via CONTROL output port, channel 7 for max brightness)
+// Send LED update for matrix pads (channel 7 for max brightness)
 function setLed(context, note, color) {
     // Validate inputs to prevent crashes
     if (typeof note !== 'number' || note < 0 || note > 127) return;
     if (typeof color !== 'number' || color < 0 || color > 127) return;
-    midiOutputControl.sendMidi(context, [0x90 | 6, note, color]); // Channel 7 (0-indexed as 6) for max brightness
+    midiOutput.sendMidi(context, [0x90 | 6, note, color]); // Channel 7 (0-indexed as 6) for max brightness
 }
 
-// Send LED update for buttons (via CONTROL output port, channel 1)
+// Send LED update for buttons (channel 1)
 function setButtonLed(context, note, velocity) {
     // Validate inputs to prevent crashes
     if (typeof note !== 'number' || note < 0 || note > 127) return;
     if (typeof velocity !== 'number' || velocity < 0 || velocity > 127) return;
-    midiOutputControl.sendMidi(context, [0x90 | 0, note, velocity]); // Channel 1 via CONTROL port
+    midiOutput.sendMidi(context, [0x90 | 0, note, velocity]); // Channel 1
 }
 
 // Clip grid (8x8)
@@ -52,11 +48,13 @@ function makeMatrixPad(note) {
     var row = Math.floor(note / 8);
     var col = note % 8;
     var pad = surface.makeTriggerPad(col * wPad, (7 - row) * hPad, wPad, hPad);
+    
+    // Bind to MIDI input to receive pad events
     pad.mSurfaceValue.mMidiBinding
-        .setInputPort(midiInputControl)
+        .setInputPort(midiInput)
         .bindToNote(midiChannel, note);
-
-    // Handle pad press/release for drum page
+    
+    // Handle pad press/release for drum page LED feedback
     pad.mSurfaceValue.mOnProcessValueChange = function(context, value) {
         if (isDrumPageActive) {
             var drumInfo = drumMap[note];
@@ -73,8 +71,8 @@ function makeRowButton(index) {
     var btn = surface.makeButton(wPad * index, 8 * hPad, buttonSize, buttonSize);
     btn.setTypePush();
     btn.mSurfaceValue.mMidiBinding
-        .setInputPort(midiInputControl)
-        .setOutputPort(midiOutputControl)
+        .setInputPort(midiInput)
+        .setOutputPort(midiOutput)
         .bindToNote(midiChannel, note);
     btn.mNote = note;
     btn.mIsButtonLED = true;
@@ -87,8 +85,8 @@ function makeColumnButton(index) {
     var btn = surface.makeButton(wPad * 8, index * hPad, buttonSize, buttonSize);
     btn.setTypePush();
     btn.mSurfaceValue.mMidiBinding
-        .setInputPort(midiInputControl)
-        .setOutputPort(midiOutputControl)
+        .setInputPort(midiInput)
+        .setOutputPort(midiOutput)
         .bindToNote(midiChannel, note);
     btn.mNote = note;
     btn.mIsButtonLED = true;
@@ -100,8 +98,8 @@ var wFader = wPad - 0.2, hFader = 3 * hPad;
 function makeFader(index) {
     var fader = surface.makeFader(wPad * index, 9 * hPad, wFader, hFader);
     fader.mSurfaceValue.mMidiBinding
-        .setInputPort(midiInputControl)
-        .setOutputPort(midiOutputControl)
+        .setInputPort(midiInput)
+        .setOutputPort(midiOutput)
         .bindToControlChange(midiChannel, 0x30 + index);
     return fader;
 }
@@ -112,6 +110,31 @@ for (var i = 0; i < 64; i++) pads.push(makeMatrixPad(i));
 for (var r = 0; r < 8; r++) rowButtons.push(makeRowButton(r));
 for (var c = 0; c < 9; c++) colButtons.push(makeColumnButton(c));
 for (var f = 0; f < 9; f++) faders.push(makeFader(f));
+
+// ============================================
+// CHASER PAGE - LED animation page (Default)
+// ============================================
+var pageChaser = deviceDriver.mMapping.makePage('Chaser');
+
+// LED chaser variables (now scrolling text)
+var chaserEnabled = false;
+var chaserPosition = 0;
+var chaserFrameCounter = 0;
+var chaserSpeed = 3; // frames between updates (lower = faster)
+
+// Text scrolling - "Cubase..." in 5x7 font
+var scrollText = "Cubase...";
+var textBitmap = {
+    'C': [0x3E, 0x41, 0x41, 0x41, 0x22],
+    'u': [0x3C, 0x40, 0x40, 0x3C, 0x00],
+    'b': [0x7F, 0x48, 0x48, 0x30, 0x00],
+    'a': [0x20, 0x54, 0x54, 0x78, 0x00],
+    's': [0x48, 0x54, 0x54, 0x24, 0x00],
+    'e': [0x38, 0x54, 0x54, 0x18, 0x00],
+    '.': [0x00, 0x60, 0x60, 0x00, 0x00],
+    ' ': [0x00, 0x00, 0x00, 0x00, 0x00]
+};
+var scrollOffset = 0;
 
 // ============================================
 // MAIN PAGE SETUP (VOLUME)
@@ -312,6 +335,19 @@ function updateDeviceRow(context, rowIndex, value) {
 for (var mi = 0; mi < modeButtons.length; mi++) {
     (function(modeIdx, subPage) {
         subPage.mOnActivate = function(context, activeMapping) {
+            // Exit chaser if it's running
+            if (chaserEnabled) {
+                chaserEnabled = false;
+                for (var i = 0; i < 64; i++) {
+                    setLed(context, i, LED_OFF);
+                }
+                // Restore navigation buttons to solid
+                setButtonLed(context, 104, 3);  // UP
+                setButtonLed(context, 105, 3);  // DOWN
+                setButtonLed(context, 106, 3);  // LEFT
+                setButtonLed(context, 107, 3);  // RIGHT
+            }
+            
             activeModeButtonIndex = modeIdx;
             // Turn off all mode button LEDs first
             for (var j = 0; j < 4; j++) {
@@ -364,20 +400,38 @@ for (var mi = 0; mi < modeButtons.length; mi++) {
     })(mi, modeButtons[mi]);
 }
 
-// Mode buttons (bottom row 0-3) with LED feedback on channel 1
-function bindModeButton(button, subPage, colorOnVelocity) {
-    page.makeActionBinding(button.mSurfaceValue, subPage.mAction.mActivate);
-    var note = button.mNote;
-    button.mSurfaceValue.mOnProcessValueChange = function(context, value) {
-        var velocity = value > 0 ? colorOnVelocity : LED_OFF;
-        setButtonLed(context, note, velocity);
-    };
-}
+// Mode buttons (bottom row 0-3) - bind actions and add chaser exit
+page.makeActionBinding(rowButtons[0].mSurfaceValue, subPageVolume.mAction.mActivate);
+page.makeActionBinding(rowButtons[1].mSurfaceValue, subPagePan.mAction.mActivate);
+page.makeActionBinding(rowButtons[2].mSurfaceValue, subPageSend.mAction.mActivate);
+page.makeActionBinding(rowButtons[3].mSurfaceValue, subPageQC.mAction.mActivate);
 
-bindModeButton(rowButtons[0], subPageVolume, LED_RED);
-bindModeButton(rowButtons[1], subPagePan, LED_RED);
-bindModeButton(rowButtons[2], subPageSend, LED_RED);
-bindModeButton(rowButtons[3], subPageQC, LED_RED);
+// Add handlers to mode buttons that work from chaser page
+for (var i = 0; i < 4; i++) {
+    (function(buttonIdx, subPage) {
+        // Also bind on pageChaser so mode buttons work from chaser page
+        pageChaser.makeActionBinding(rowButtons[buttonIdx].mSurfaceValue, page.mAction.mActivate);
+        
+        rowButtons[buttonIdx].mSurfaceValue.mOnProcessValueChange = function(context, activeMapping, value) {
+            if (value > 0) {
+                // Exit chaser if running
+                if (chaserEnabled) {
+                    chaserEnabled = false;
+                    for (var j = 0; j < 64; j++) {
+                        setLed(context, j, LED_OFF);
+                    }
+                    setButtonLed(context, 104, 3);  // UP
+                    setButtonLed(context, 105, 3);  // DOWN
+                    setButtonLed(context, 106, 3);  // LEFT
+                    setButtonLed(context, 107, 3);  // RIGHT
+                }
+                // Activate main page first, then the subpage
+                page.mAction.mActivate.trigger(activeMapping);
+                subPage.mAction.mActivate.trigger(activeMapping);
+            }
+        };
+    })(i, modeButtons[i]);
+}
 
 // Navigation buttons (UP, DOWN, LEFT, RIGHT)
 var navActions = [
@@ -390,6 +444,21 @@ var navButtonIndices = [6, 7, 4, 5];  // LEFT, RIGHT, UP, DOWN
 for (var i = 0; i < 4; i++) {
     (function(navIdx, rowIdx, navAction) {
         page.makeActionBinding(rowButtons[rowIdx].mSurfaceValue, navAction);
+        // Add handler to exit chaser when navigation button pressed
+        rowButtons[rowIdx].mSurfaceValue.mOnProcessValueChange = function(context, value) {
+            if (value > 0 && chaserEnabled) {
+                // Exit chaser page when navigation button pressed
+                chaserEnabled = false;
+                for (var i = 0; i < 64; i++) {
+                    setLed(context, i, LED_OFF);
+                }
+                // Restore all navigation buttons to solid
+                setButtonLed(context, 104, 3);  // UP
+                setButtonLed(context, 105, 3);  // DOWN
+                setButtonLed(context, 106, 3);  // LEFT
+                setButtonLed(context, 107, 3);  // RIGHT (stop flashing)
+            }
+        };
     })(i, navButtonIndices[i], navActions[i]);
 }
 
@@ -509,19 +578,28 @@ for (var fi = 0; fi < 8; fi++) {
 // Main page activation
 page.mOnActivate = function(context) {
     isDrumPageActive = false; // Clear drum page flag
+    chaserEnabled = false; // Ensure chaser is stopped
     
-    // Light up navigation buttons (UP, DOWN, LEFT, RIGHT)
+    // Light up navigation buttons (UP, DOWN, LEFT, RIGHT) - solid, not flashing
     setButtonLed(context, 104, 3);  // UP
-    setButtonLed(context, 105, 3);  // DOWN - red
-    setButtonLed(context, 106, 3);  // LEFT - red
-    setButtonLed(context, 107, 3);  // RIGHT - red
+    setButtonLed(context, 105, 3);  // DOWN
+    setButtonLed(context, 106, 3);  // LEFT
+    setButtonLed(context, 107, 3);  // RIGHT
     
     // Restore the active mode button LED
     setButtonLed(context, rowButtons[activeModeButtonIndex].mNote, LED_RED);
     
-    // Update fader meters to current positions
+    // Update all pad displays based on active mode
     for (var i = 0; i < 8; i++) {
-        updatePadColumn(context, i, faderValues[i]);
+        if (activeModeButtonIndex === 0) {
+            updatePadColumn(context, i, faderValues[i]);
+        } else if (activeModeButtonIndex === 1) {
+            updatePanRow(context, i, panValues[i]);
+        } else if (activeModeButtonIndex === 2) {
+            updateSendRow(context, i, sendValues[i]);
+        } else if (activeModeButtonIndex === 3) {
+            updateDeviceRow(context, i, deviceValues[i]);
+        }
     }
 };
 
@@ -533,11 +611,18 @@ deviceDriver.mOnActivate = function(context) {
     for (var c = 0; c < colButtons.length; c++) setButtonLed(context, colButtons[c].mNote, LED_OFF);
     
     // Activate Volume mode and navigation buttons
+    activeModeButtonIndex = 0;
     setButtonLed(context, rowButtons[0].mNote, LED_RED);
     setButtonLed(context, 104, 3);  // UP
     setButtonLed(context, 105, 3);  // DOWN
     setButtonLed(context, 106, 3);  // LEFT
     setButtonLed(context, 107, 3);  // RIGHT
+    
+    // Initialize all fader displays
+    for (var i = 0; i < 8; i++) {
+        faderValues[i] = 0;
+        updatePadColumn(context, i, 0);
+    }
     
     // Initialize fader values to zero (will update as faders are moved)
     for (var ci = 0; ci < 8; ci++) {
@@ -650,13 +735,9 @@ pageDrums.mOnActivate = function(context) {
     
     // Turn off bottom row buttons except LEFT
     for (var r = 0; r < 8; r++) {
-        if (r === 6) {
-            // LEFT button (note 106) - blink to stand out
-            setButtonLed(context, 106, 2);  // Blink
-        } else {
-            setButtonLed(context, 100 + r, LED_OFF);
-        }
+        setButtonLed(context, 100 + r, LED_OFF);
     }
+    setButtonLed(context, 106, 2);  // LEFT button blinks to indicate drum mode
     
     // Turn off column buttons
     for (var c = 0; c < 8; c++) {
@@ -672,4 +753,79 @@ pageDrums.mOnActivate = function(context) {
 
 pageDrums.mOnDeactivate = function(context) {
     isDrumPageActive = false;
+};
+
+// Scrolling text update function
+function updateChaser(context) {
+    // Clear all pads
+    for (var i = 0; i < 64; i++) {
+        setLed(context, i, LED_OFF);
+    }
+    
+    // Build the full character array for the text
+    var charColumns = [];
+    for (var ci = 0; ci < scrollText.length; ci++) {
+        var char = scrollText.charAt(ci);
+        var bitmap = textBitmap[char] || textBitmap[' '];
+        for (var col = 0; col < 5; col++) {
+            charColumns.push(bitmap[col]);
+        }
+        charColumns.push(0); // space between characters
+    }
+    
+    // Display 8 columns starting from scrollOffset
+    for (var col = 0; col < 8; col++) {
+        var charColIndex = (scrollOffset + col) % charColumns.length;
+        var columnData = charColumns[charColIndex];
+        
+        // Draw column (flip vertically - row 7 is top, row 0 is bottom)
+        for (var row = 0; row < 8; row++) {
+            if (columnData & (1 << row)) {
+                var flippedRow = 7 - row; // Flip the row
+                var note = col + flippedRow * 8;
+                setLed(context, note, LED_CYAN); // Cyan color for text
+            }
+        }
+    }
+    
+    // Move scroll position
+    scrollOffset = (scrollOffset + 1) % charColumns.length;
+}
+
+// Device idle callback for chaser animation
+deviceDriver.mOnIdle = function(activeDevice) {
+    if (chaserEnabled) {
+        chaserFrameCounter++;
+        if (chaserFrameCounter >= chaserSpeed) {
+            chaserFrameCounter = 0;
+            updateChaser(activeDevice);
+        }
+    }
+};
+
+// Chaser page activation (now scrolling text)
+pageChaser.mOnActivate = function(context) {
+    chaserEnabled = true;
+    scrollOffset = 0;
+    chaserFrameCounter = 0;
+    
+    // Turn off all bottom row buttons except RIGHT (blink to indicate chaser mode)
+    for (var r = 0; r < 8; r++) {
+        setButtonLed(context, 100 + r, LED_OFF);
+    }
+    setButtonLed(context, 107, 2);  // RIGHT button blinks
+    
+    // Turn off column buttons
+    for (var c = 0; c < 8; c++) {
+        setButtonLed(context, 112 + c, LED_OFF);
+    }
+    setButtonLed(context, 122, LED_OFF);
+};
+
+pageChaser.mOnDeactivate = function(context) {
+    chaserEnabled = false;
+    // Clear all LEDs when leaving chaser page
+    for (var i = 0; i < 64; i++) {
+        setLed(context, i, LED_OFF);
+    }
 };
