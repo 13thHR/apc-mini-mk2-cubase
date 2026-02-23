@@ -1,5 +1,19 @@
 var midiremote_api = require('midiremote_api_v1');
 
+// ============================================
+// CONFIGURATION
+// ============================================
+// Fader takeover mode: 'jump', 'scaled', or 'pickup'
+//   'jump'   — LEDs always show the real DAW value. Fader jumps on bank/mode switch. (Recommended)
+//   'scaled' — Smooth fader control, no jumps. LEDs only update after physically moving the fader.
+//   'pickup' — Fader must reach the DAW value before it takes effect. LEDs show physical position.
+var FADER_TAKEOVER_MODE = 'jump';
+
+// LED display orientation: 'vertical' or 'horizontal'
+//   'vertical'   — Each column = one channel, rows show level bottom-to-top (matches faders)
+//   'horizontal' — Each row = one channel, columns show level left-to-right
+var LED_DISPLAY_ORIENTATION = 'vertical';
+
 var deviceDriver = midiremote_api.makeDeviceDriver('Akai', 'APC MINI MK2', '13thHouR v2');
 var midiInput = deviceDriver.mPorts.makeMidiInput();
 var midiOutput = deviceDriver.mPorts.makeMidiOutput();
@@ -26,6 +40,13 @@ var LED_BLINK = 2;         // Flash (for channel 1 buttons)
 
 // Dimensions
 var wPad = 2, hPad = 1, buttonSize = hPad;
+
+// Apply the configured takeover mode to a value binding
+function applyTakeOverMode(binding) {
+    if (FADER_TAKEOVER_MODE === 'scaled') return binding.setValueTakeOverModeScaled();
+    if (FADER_TAKEOVER_MODE === 'pickup') return binding.setValueTakeOverModePickup();
+    return binding.setValueTakeOverModeJump();
+}
 
 // Send LED update for matrix pads (channel 7 for max brightness)
 function setLed(context, note, color) {
@@ -171,6 +192,8 @@ var sendPositions = [0,0,0,0,0,0,0,0];  // Track actual pad positions
 // Track device (Quick Controls) values (0..1)
 var deviceValues = [0,0,0,0,0,0,0,0];
 var deviceSteps = [0,0,0,0,0,0,0,0];  // Track actual pad steps
+var refreshCountdown = 0;  // >0 = refresh pending, counts down in mOnIdle
+var bankSwitchTriggered = false;  // debounce flag for mOnTitleChange re-activation
 // Track visible pad state per column: array of 8 colors (or LED_OFF) for each col
 var padColumnState = [
     [0,0,0,0,0,0,0,0],
@@ -331,6 +354,125 @@ function updateDeviceRow(context, rowIndex, value) {
     padColumnState[rowIndex] = newState;
 }
 
+// Update pan column display (vertical): dim white background with blue indicator
+// colIndex: which column (0-7) for this channel
+// panValue: 0..1 where 0.5 is center
+function updatePanColumn(context, colIndex, panValue) {
+    if (typeof panValue === 'undefined') {
+        panValue = panValues[colIndex] || 0.5;
+    }
+
+    // Calculate pan position as row (0=bottom=left, 7=top=right)
+    var panPos = Math.max(0, Math.min(7, Math.floor(panValue * 8)));
+
+    if (panPos === panPositions[colIndex]) return;
+    panPositions[colIndex] = panPos;
+
+    var prevState = padColumnState[colIndex];
+    var newState = [];
+
+    for (var r = 0; r < 8; r++) {
+        if (r === panPos) {
+            newState[r] = LED_BLUE;
+        } else {
+            newState[r] = LED_WHITE;
+        }
+    }
+
+    for (var r = 0; r < 8; r++) {
+        if (newState[r] !== prevState[r]) {
+            var note = r * 8 + colIndex;
+            setLed(context, note, newState[r]);
+        }
+    }
+
+    padColumnState[colIndex] = newState;
+}
+
+// Update send column display (vertical): yellow background with orange bar from bottom
+// colIndex: which column (0-7) for this channel
+// sendValue: 0..1
+function updateSendColumn(context, colIndex, sendValue) {
+    if (typeof sendValue === 'undefined') {
+        sendValue = sendValues[colIndex] || 0;
+    }
+
+    var steps = Math.max(0, Math.min(8, Math.floor(sendValue * 8)));
+
+    if (steps === sendPositions[colIndex]) return;
+    sendPositions[colIndex] = steps;
+
+    var prevState = padColumnState[colIndex];
+    var newState = [];
+
+    for (var r = 0; r < 8; r++) {
+        if (r < steps) {
+            newState[r] = LED_ORANGE;
+        } else {
+            newState[r] = LED_YELLOW;
+        }
+    }
+
+    for (var r = 0; r < 8; r++) {
+        if (newState[r] !== prevState[r]) {
+            var note = r * 8 + colIndex;
+            setLed(context, note, newState[r]);
+        }
+    }
+
+    padColumnState[colIndex] = newState;
+}
+
+// Update device column display (vertical): purple/pink bar from bottom
+// colIndex: which column (0-7) for this channel
+// value: 0..1
+function updateDeviceColumn(context, colIndex, value) {
+    if (typeof value === 'undefined') {
+        value = deviceValues[colIndex] || 0;
+    }
+
+    var steps = Math.max(0, Math.min(8, Math.floor(value * 8)));
+    if (steps === deviceSteps[colIndex]) return;
+    deviceSteps[colIndex] = steps;
+
+    var prevState = padColumnState[colIndex];
+    var newState = [];
+
+    for (var r = 0; r < 8; r++) {
+        if (r < steps) {
+            var color = 53;                    // Purple/Magenta
+            if (r >= 6) color = LED_PINK;      // Top rows: bright pink
+            else color = 53;                   // Lower rows: purple/magenta
+            newState[r] = color;
+        } else {
+            newState[r] = LED_OFF;
+        }
+    }
+
+    for (var r = 0; r < 8; r++) {
+        if (newState[r] !== prevState[r]) {
+            var note = r * 8 + colIndex;
+            setLed(context, note, newState[r]);
+        }
+    }
+
+    padColumnState[colIndex] = newState;
+}
+
+// Wrapper functions that dispatch to vertical or horizontal based on config
+function updatePan(context, index, value) {
+    if (LED_DISPLAY_ORIENTATION === 'vertical') updatePanColumn(context, index, value);
+    else updatePanRow(context, index, value);
+}
+function updateSend(context, index, value) {
+    if (LED_DISPLAY_ORIENTATION === 'vertical') updateSendColumn(context, index, value);
+    else updateSendRow(context, index, value);
+}
+function updateDevice(context, index, value) {
+    if (LED_DISPLAY_ORIENTATION === 'vertical') updateDeviceColumn(context, index, value);
+    else updateDeviceRow(context, index, value);
+}
+
 // Add activation handlers to update LEDs when subpage activates
 for (var mi = 0; mi < modeButtons.length; mi++) {
     (function(modeIdx, subPage) {
@@ -377,25 +519,29 @@ for (var mi = 0; mi < modeButtons.length; mi++) {
             if (modeIdx === 1) {
                 for (var pi = 0; pi < 8; pi++) {
                     panPositions[pi] = -1;  // Force update on first display
-                    updatePanRow(context, pi, panValues[pi]);
+                    updatePan(context, pi, panValues[pi]);
                 }
             }
-            
+
             // If Send mode activated, update all send rows
             if (modeIdx === 2) {
                 for (var si = 0; si < 8; si++) {
                     sendPositions[si] = -1;
-                    updateSendRow(context, si, sendValues[si]);
+                    updateSend(context, si, sendValues[si]);
                 }
             }
-            
+
             // If Device mode activated, update all device rows
             if (modeIdx === 3) {
                 for (var qi = 0; qi < 8; qi++) {
                     deviceSteps[qi] = -1;
-                    updateDeviceRow(context, qi, deviceValues[qi]);
+                    updateDevice(context, qi, deviceValues[qi]);
                 }
             }
+
+            // Safety net: schedule delayed refresh in case cached values were stale
+            // (e.g. after startup when mOnValueChange hasn't fired yet)
+            refreshCountdown = 10;
         };
     })(mi, modeButtons[mi]);
 }
@@ -446,17 +592,18 @@ for (var i = 0; i < 4; i++) {
         page.makeActionBinding(rowButtons[rowIdx].mSurfaceValue, navAction);
         // Add handler to exit chaser when navigation button pressed
         rowButtons[rowIdx].mSurfaceValue.mOnProcessValueChange = function(context, value) {
-            if (value > 0 && chaserEnabled) {
-                // Exit chaser page when navigation button pressed
-                chaserEnabled = false;
-                for (var i = 0; i < 64; i++) {
-                    setLed(context, i, LED_OFF);
+            if (value > 0) {
+                refreshCountdown = 10;  // ~300ms delay for Cubase to send new values
+                if (chaserEnabled) {
+                    chaserEnabled = false;
+                    for (var i = 0; i < 64; i++) {
+                        setLed(context, i, LED_OFF);
+                    }
+                    setButtonLed(context, 104, 3);
+                    setButtonLed(context, 105, 3);
+                    setButtonLed(context, 106, 3);
+                    setButtonLed(context, 107, 3);
                 }
-                // Restore all navigation buttons to solid
-                setButtonLed(context, 104, 3);  // UP
-                setButtonLed(context, 105, 3);  // DOWN
-                setButtonLed(context, 106, 3);  // LEFT
-                setButtonLed(context, 107, 3);  // RIGHT (stop flashing)
             }
         };
     })(i, navButtonIndices[i], navActions[i]);
@@ -467,12 +614,20 @@ var mixerChannels = [];
 for (var i = 0; i < 8; i++) {
     mixerChannels[i] = hostMixerBankZone.makeMixerBankChannel();
     
-    var volumeBinding = page.makeValueBinding(faders[i].mSurfaceValue, mixerChannels[i].mValue.mVolume)
-        .setValueTakeOverModeScaled()
+    var volumeBinding = applyTakeOverMode(page.makeValueBinding(faders[i].mSurfaceValue, mixerChannels[i].mValue.mVolume))
         .setSubPage(subPageVolume);
 
-    var panBinding = page.makeValueBinding(faders[i].mSurfaceValue, mixerChannels[i].mValue.mPan)
-        .setValueTakeOverModeScaled()
+    // Add volume value change handler to update display on bank switch / project load
+    (function(index, binding) {
+        binding.mOnValueChange = function(context, mapping, value) {
+            faderValues[index] = value;
+            if (!isDrumPageActive && activeModeButtonIndex === 0) {
+                updatePadColumn(context, index, value);
+            }
+        };
+    })(i, volumeBinding);
+
+    var panBinding = applyTakeOverMode(page.makeValueBinding(faders[i].mSurfaceValue, mixerChannels[i].mValue.mPan))
         .setSubPage(subPagePan);
     
     // Add pan value change handler to update display
@@ -481,56 +636,71 @@ for (var i = 0; i < 8; i++) {
             panValues[index] = value;
             // Update the row display if we're on Pan page
             if (!isDrumPageActive && activeModeButtonIndex === 1) {
-                updatePanRow(context, index, value);
+                updatePan(context, index, value);
             }
         };
     })(i, panBinding);
-    
+
     // Send binding with visual feedback
-    var sendBinding = page.makeValueBinding(faders[i].mSurfaceValue, mixerChannels[i].mSends.getByIndex(0).mLevel)
-        .setValueTakeOverModeScaled()
+    var sendBinding = applyTakeOverMode(page.makeValueBinding(faders[i].mSurfaceValue, mixerChannels[i].mSends.getByIndex(0).mLevel))
         .setSubPage(subPageSend);
-    
+
     // Add send value change handler to update display
     (function(index, binding) {
         binding.mOnValueChange = function(context, mapping, value) {
             sendValues[index] = value;
             if (!isDrumPageActive && activeModeButtonIndex === 2) {
-                updateSendRow(context, index, value);
+                updateSend(context, index, value);
             }
         };
     })(i, sendBinding);
-    
-    var deviceBinding = page.makeValueBinding(faders[i].mSurfaceValue, page.mHostAccess.mFocusedQuickControls.getByIndex(i))
-        .setValueTakeOverModeScaled()
+
+    var deviceBinding = applyTakeOverMode(page.makeValueBinding(faders[i].mSurfaceValue, page.mHostAccess.mFocusedQuickControls.getByIndex(i)))
         .setSubPage(subPageQC);
-    
+
     // Add device value change handler to update display
     (function(index, binding) {
         binding.mOnValueChange = function(context, mapping, value) {
             deviceValues[index] = value;
             if (!isDrumPageActive && activeModeButtonIndex === 3) {
-                updateDeviceRow(context, index, value);
+                updateDevice(context, index, value);
             }
         };
     })(i, deviceBinding);
+
+    // Detect bank switch via title change — re-activate current subpage to force mOnValueChange
+    (function(index) {
+        mixerChannels[index].mOnTitleChange = function(activeDevice, activeMapping, title) {
+            if (!bankSwitchTriggered && !isDrumPageActive && !chaserEnabled) {
+                bankSwitchTriggered = true;
+                // Re-activate current subpage — this forces mOnValueChange on all bindings
+                // (same mechanism as mode-switch, which works correctly)
+                modeButtons[activeModeButtonIndex].mAction.mActivate.trigger(activeMapping);
+                // Safety net timer in case re-activation doesn't fully refresh
+                refreshCountdown = 10;
+            }
+        };
+    })(i);
 }
 
-// Track selection buttons with LED feedback
+// Track selection buttons with LED feedback (bound on all non-shift subpages)
 var lastSelectionUpdate = [0, 0, 0, 0, 0, 0, 0, 0];
 for (var i = 0; i < 8; i++) {
     (function(index, button) {
-        var binding = page.makeValueBinding(button.mSurfaceValue, mixerChannels[index].mValue.mSelected)
-            .setSubPage(subPageVolume);
-        
-        binding.mOnValueChange = function(context, mapping, value) {
-            var now = Date.now();
-            if (now - lastSelectionUpdate[index] < 50) return;
-            lastSelectionUpdate[index] = now;
-            
-            var velocity = value > 0 ? 1 : LED_OFF;
-            setButtonLed(context, 112 + index, velocity);
-        };
+        var selectionSubPages = [subPageVolume, subPagePan, subPageSend, subPageQC];
+        for (var s = 0; s < selectionSubPages.length; s++) {
+            var binding = page.makeValueBinding(button.mSurfaceValue, mixerChannels[index].mValue.mSelected)
+                .setSubPage(selectionSubPages[s]);
+
+            binding.mOnValueChange = function(context, mapping, value) {
+                var now = Date.now();
+                if (now - lastSelectionUpdate[index] < 50) return;
+                lastSelectionUpdate[index] = now;
+
+                var velocity = value > 0 ? 1 : LED_OFF;
+                setButtonLed(context, 112 + index, velocity);
+            };
+        }
     })(i, colButtons[i]);
 }
 
@@ -549,27 +719,50 @@ shiftBinding.mOnValueChange = function(context, mapping, value) {
     lastShiftValue = value;
 };
 
-// Master fader binding
+// Master fader binding — only active on Volume subpage (API limitation: global binding doesn't work)
 if (faders.length > 8) {
-    page.makeValueBinding(faders[8].mSurfaceValue, mainOutputChannel.mValue.mVolume)
-        .setValueTakeOverModeScaled()
+    applyTakeOverMode(page.makeValueBinding(faders[8].mSurfaceValue, mainOutputChannel.mValue.mVolume))
         .setSubPage(subPageVolume);
 }
 
-// Update pad display when faders move
+// Shift + column button bindings: transport & track controls
+page.makeValueBinding(colButtons[0].mSurfaceValue,
+    page.mHostAccess.mTransport.mValue.mStart)
+    .setTypeToggle()
+    .setSubPage(subPageFuncShift);
+page.makeValueBinding(colButtons[1].mSurfaceValue,
+    page.mHostAccess.mTrackSelection.mMixerChannel.mValue.mSolo)
+    .setTypeToggle()
+    .setSubPage(subPageFuncShift);
+page.makeValueBinding(colButtons[2].mSurfaceValue,
+    page.mHostAccess.mTrackSelection.mMixerChannel.mValue.mMute)
+    .setTypeToggle()
+    .setSubPage(subPageFuncShift);
+page.makeValueBinding(colButtons[3].mSurfaceValue,
+    page.mHostAccess.mTrackSelection.mMixerChannel.mValue.mRecordEnable)
+    .setTypeToggle()
+    .setSubPage(subPageFuncShift);
+
+// Update pad display when surface value changes (fader move, bank switch, mode switch).
+// In Jump mode, surface value = host value, so this gives correct feedback.
+// In Scaled/Pickup mode, surface value = physical fader position (less accurate but still useful).
 for (var fi = 0; fi < 8; fi++) {
     (function(index) {
         faders[index].mSurfaceValue.mOnProcessValueChange = function(context, value, diff) {
-            var oldValue = faderValues[index] || 0;
-            faderValues[index] = value;
-            
-            if (!isDrumPageActive && Math.abs(oldValue - value) > 0.005) {
-                if (activeModeButtonIndex === 0) {
-                    updatePadColumn(context, index, value);
-                } else if (activeModeButtonIndex === 3) {
-                    deviceValues[index] = value;
-                    updateDeviceRow(context, index, value);
-                }
+            if (isDrumPageActive) return;
+
+            if (activeModeButtonIndex === 0) {
+                faderValues[index] = value;
+                updatePadColumn(context, index, value);
+            } else if (activeModeButtonIndex === 1) {
+                panValues[index] = value;
+                updatePan(context, index, value);
+            } else if (activeModeButtonIndex === 2) {
+                sendValues[index] = value;
+                updateSend(context, index, value);
+            } else if (activeModeButtonIndex === 3) {
+                deviceValues[index] = value;
+                updateDevice(context, index, value);
             }
         };
     })(fi);
@@ -594,11 +787,11 @@ page.mOnActivate = function(context) {
         if (activeModeButtonIndex === 0) {
             updatePadColumn(context, i, faderValues[i]);
         } else if (activeModeButtonIndex === 1) {
-            updatePanRow(context, i, panValues[i]);
+            updatePan(context, i, panValues[i]);
         } else if (activeModeButtonIndex === 2) {
-            updateSendRow(context, i, sendValues[i]);
+            updateSend(context, i, sendValues[i]);
         } else if (activeModeButtonIndex === 3) {
-            updateDeviceRow(context, i, deviceValues[i]);
+            updateDevice(context, i, deviceValues[i]);
         }
     }
 };
@@ -609,25 +802,28 @@ deviceDriver.mOnActivate = function(context) {
     for (var i = 0; i < 64; i++) setLed(context, i, LED_OFF);
     for (var r = 0; r < rowButtons.length; r++) setButtonLed(context, rowButtons[r].mNote, LED_OFF);
     for (var c = 0; c < colButtons.length; c++) setButtonLed(context, colButtons[c].mNote, LED_OFF);
-    
-    // Activate Volume mode and navigation buttons
+
     activeModeButtonIndex = 0;
     setButtonLed(context, rowButtons[0].mNote, LED_RED);
-    setButtonLed(context, 104, 3);  // UP
-    setButtonLed(context, 105, 3);  // DOWN
-    setButtonLed(context, 106, 3);  // LEFT
-    setButtonLed(context, 107, 3);  // RIGHT
-    
-    // Initialize all fader displays
+    setButtonLed(context, 104, 3);
+    setButtonLed(context, 105, 3);
+    setButtonLed(context, 106, 3);
+    setButtonLed(context, 107, 3);
+
+    // DON'T reset faderValues/panValues/sendValues/deviceValues — keep cached host values
+    // Force-reset display state trackers so next refresh redraws everything
     for (var i = 0; i < 8; i++) {
-        faderValues[i] = 0;
-        updatePadColumn(context, i, 0);
+        faderSteps[i] = -1;
+        panPositions[i] = -1;
+        sendPositions[i] = -1;
+        deviceSteps[i] = -1;
+        padColumnState[i] = [0,0,0,0,0,0,0,0];
     }
-    
-    // Initialize fader values to zero (will update as faders are moved)
-    for (var ci = 0; ci < 8; ci++) {
-        faderValues[ci] = 0;
-    }
+
+    chaserEnabled = true;
+    scrollOffset = 0;
+    // Don't set refreshCountdown here — chaser runs indefinitely
+    // Refresh happens when user exits chaser via subPage.mOnActivate handler
 };
 
 // ============================================
@@ -792,6 +988,25 @@ function updateChaser(context) {
     scrollOffset = (scrollOffset + 1) % charColumns.length;
 }
 
+// Force-refresh pad display from cached values (used after startup/bank-switch)
+function refreshPadDisplay(context) {
+    // Force-reset display state so updates always draw
+    for (var i = 0; i < 8; i++) {
+        faderSteps[i] = -1;
+        panPositions[i] = -1;
+        sendPositions[i] = -1;
+        deviceSteps[i] = -1;
+        padColumnState[i] = [0,0,0,0,0,0,0,0];
+    }
+    // Redraw based on active mode
+    for (var i = 0; i < 8; i++) {
+        if (activeModeButtonIndex === 0) updatePadColumn(context, i, faderValues[i]);
+        else if (activeModeButtonIndex === 1) updatePan(context, i, panValues[i]);
+        else if (activeModeButtonIndex === 2) updateSend(context, i, sendValues[i]);
+        else if (activeModeButtonIndex === 3) updateDevice(context, i, deviceValues[i]);
+    }
+}
+
 // Device idle callback for chaser animation
 deviceDriver.mOnIdle = function(activeDevice) {
     if (chaserEnabled) {
@@ -799,6 +1014,16 @@ deviceDriver.mOnIdle = function(activeDevice) {
         if (chaserFrameCounter >= chaserSpeed) {
             chaserFrameCounter = 0;
             updateChaser(activeDevice);
+        }
+    }
+    // Delayed refresh after bank switch or startup
+    if (refreshCountdown > 0) {
+        refreshCountdown--;
+        if (refreshCountdown === 0) {
+            bankSwitchTriggered = false;  // Allow next bank switch to trigger re-activation
+            if (!chaserEnabled && !isDrumPageActive) {
+                refreshPadDisplay(activeDevice);
+            }
         }
     }
 };

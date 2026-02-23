@@ -6,9 +6,10 @@ A custom MIDI Remote script for the Akai APC mini MK2 controller in Steinberg Cu
 
 ### VOLUME Page
 - **Volume Mode**: Vertical LED meters showing channel volume levels
-- **Pan Mode**: Horizontal LED meters showing pan positions
-- **Send Mode**: Horizontal LED meters showing send levels
-- **Device Mode**: Control Quick Controls with visual feedback
+- **Pan Mode**: LED meters showing pan positions (blue indicator on white background)
+- **Send Mode**: LED meters showing send levels (orange on yellow background)
+- **Device Mode**: Control Quick Controls with visual feedback (purple/pink bars)
+- **Configurable LED orientation**: Set `LED_DISPLAY_ORIENTATION` to `'vertical'` (column per channel, matches fader layout) or `'horizontal'` (row per channel) for Pan, Send, and Device modes
 
 ### DRUMS Page
 - Full 8x8 pad grid (64 pads)
