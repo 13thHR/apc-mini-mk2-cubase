@@ -635,9 +635,24 @@ deviceDriver.mOnActivate = function(context) {
 // ============================================
 pageDrums = deviceDriver.mMapping.makePage('DRUMS');
 
-// Drum map: 8x8 grid sends MIDI notes 0-63
+// Drum map: 8x8 grid sends MIDI notes 0-63 (default hardware mode)
 // Color blocks: RED (bottom-left), CYAN (bottom-right), YELLOW (top-left), PURPLE (top-right)
-// For Groove Agent: assign sounds directly to notes 0-63, or use MIDI Transpose +36
+//
+// NOTE: The APC mini MK2 has a built-in Drum Mode (Shift+Scene Launch 6), but it is
+// Ableton-specific and unusable for Cubase. It sends notes in different octave ranges per
+// quadrant (e.g., E3/E6 instead of C1) that match neither our surface bindings (0-63) nor
+// Groove Agent's expected layout. The Note Mode (Shift+Scene Launch 7) only sends whole
+// tones. Therefore we use the default hardware mode and remap via Input Transformer.
+//
+// Groove Agent Setup (Cubase 12+):
+// The purple quadrant sends notes 36-39, 44-47, 52-55, 60-63 (not consecutive).
+// Groove Agent expects 16 consecutive notes per pad bank (C1-D#2 = 36-51).
+// Use Track Input Transformer to remap:
+//   Module 1: Notes 44-47 → 40-43 (Value 1 Subtract 4, Function: Transform)
+//   Module 2: Notes 52-55 → 44-47 (Value 1 Subtract 8, Function: Transform)
+//   Module 3: Notes 60-63 → 48-51 (Value 1 Subtract 12, Function: Transform)
+// Notes 36-39 pass through unchanged = C1-D#1
+// Result: Purple quadrant sends C1-D#2 (36-51) = GA Pad Bank 1
 
 // Navigation: Shift+RIGHT to drum page, LEFT to return to main page
 var shiftDrumBinding = page.makeActionBinding(rowButtons[7].mSurfaceValue, pageDrums.mAction.mActivate)
@@ -646,84 +661,84 @@ var drumLeftToMainBinding = pageDrums.makeActionBinding(rowButtons[6].mSurfaceVa
 
 var drumMap = [
     // Row 0 (bottom): notes 0-7
-    {note: 0, name: 'Note 0', color: LED_RED, pressColor: LED_ORANGE},
-    {note: 1, name: 'Note 1', color: LED_RED, pressColor: LED_ORANGE},
-    {note: 2, name: 'Note 2', color: LED_RED, pressColor: LED_ORANGE},
-    {note: 3, name: 'Note 3', color: LED_RED, pressColor: LED_ORANGE},
-    {note: 4, name: 'Note 4', color: LED_CYAN, pressColor: LED_WHITE},
-    {note: 5, name: 'Note 5', color: LED_CYAN, pressColor: LED_WHITE},
-    {note: 6, name: 'Note 6', color: LED_CYAN, pressColor: LED_WHITE},
-    {note: 7, name: 'Note 7', color: LED_CYAN, pressColor: LED_WHITE},
-    
+    {note: 0, name: 'C-2', color: LED_RED, pressColor: LED_ORANGE},
+    {note: 1, name: 'C#-2', color: LED_RED, pressColor: LED_ORANGE},
+    {note: 2, name: 'D-2', color: LED_RED, pressColor: LED_ORANGE},
+    {note: 3, name: 'D#-2', color: LED_RED, pressColor: LED_ORANGE},
+    {note: 4, name: 'E-2', color: LED_CYAN, pressColor: LED_WHITE},
+    {note: 5, name: 'F-2', color: LED_CYAN, pressColor: LED_WHITE},
+    {note: 6, name: 'F#-2', color: LED_CYAN, pressColor: LED_WHITE},
+    {note: 7, name: 'G-2', color: LED_CYAN, pressColor: LED_WHITE},
+
     // Row 1: notes 8-15
-    {note: 8, name: 'Note 8', color: LED_RED, pressColor: LED_ORANGE},
-    {note: 9, name: 'Note 9', color: LED_RED, pressColor: LED_ORANGE},
-    {note: 10, name: 'Note 10', color: LED_RED, pressColor: LED_ORANGE},
-    {note: 11, name: 'Note 11', color: LED_RED, pressColor: LED_ORANGE},
-    {note: 12, name: 'Note 12', color: LED_CYAN, pressColor: LED_WHITE},
-    {note: 13, name: 'Note 13', color: LED_CYAN, pressColor: LED_WHITE},
-    {note: 14, name: 'Note 14', color: LED_CYAN, pressColor: LED_WHITE},
-    {note: 15, name: 'Note 15', color: LED_CYAN, pressColor: LED_WHITE},
-    
+    {note: 8, name: 'G#-2', color: LED_RED, pressColor: LED_ORANGE},
+    {note: 9, name: 'A-2', color: LED_RED, pressColor: LED_ORANGE},
+    {note: 10, name: 'A#-2', color: LED_RED, pressColor: LED_ORANGE},
+    {note: 11, name: 'B-2', color: LED_RED, pressColor: LED_ORANGE},
+    {note: 12, name: 'C-1', color: LED_CYAN, pressColor: LED_WHITE},
+    {note: 13, name: 'C#-1', color: LED_CYAN, pressColor: LED_WHITE},
+    {note: 14, name: 'D-1', color: LED_CYAN, pressColor: LED_WHITE},
+    {note: 15, name: 'D#-1', color: LED_CYAN, pressColor: LED_WHITE},
+
     // Row 2: notes 16-23
-    {note: 16, name: 'Note 16', color: LED_RED, pressColor: LED_ORANGE},
-    {note: 17, name: 'Note 17', color: LED_RED, pressColor: LED_ORANGE},
-    {note: 18, name: 'Note 18', color: LED_RED, pressColor: LED_ORANGE},
-    {note: 19, name: 'Note 19', color: LED_RED, pressColor: LED_ORANGE},
-    {note: 20, name: 'Note 20', color: LED_CYAN, pressColor: LED_WHITE},
-    {note: 21, name: 'Note 21', color: LED_CYAN, pressColor: LED_WHITE},
-    {note: 22, name: 'Note 22', color: LED_CYAN, pressColor: LED_WHITE},
-    {note: 23, name: 'Note 23', color: LED_CYAN, pressColor: LED_WHITE},
-    
+    {note: 16, name: 'E-1', color: LED_RED, pressColor: LED_ORANGE},
+    {note: 17, name: 'F-1', color: LED_RED, pressColor: LED_ORANGE},
+    {note: 18, name: 'F#-1', color: LED_RED, pressColor: LED_ORANGE},
+    {note: 19, name: 'G-1', color: LED_RED, pressColor: LED_ORANGE},
+    {note: 20, name: 'G#-1', color: LED_CYAN, pressColor: LED_WHITE},
+    {note: 21, name: 'A-1', color: LED_CYAN, pressColor: LED_WHITE},
+    {note: 22, name: 'A#-1', color: LED_CYAN, pressColor: LED_WHITE},
+    {note: 23, name: 'B-1', color: LED_CYAN, pressColor: LED_WHITE},
+
     // Row 3: notes 24-31
-    {note: 24, name: 'Note 24', color: LED_RED, pressColor: LED_ORANGE},
-    {note: 25, name: 'Note 25', color: LED_RED, pressColor: LED_ORANGE},
-    {note: 26, name: 'Note 26', color: LED_RED, pressColor: LED_ORANGE},
-    {note: 27, name: 'Note 27', color: LED_RED, pressColor: LED_ORANGE},
-    {note: 28, name: 'Note 28', color: LED_CYAN, pressColor: LED_WHITE},
-    {note: 29, name: 'Note 29', color: LED_CYAN, pressColor: LED_WHITE},
-    {note: 30, name: 'Note 30', color: LED_CYAN, pressColor: LED_WHITE},
-    {note: 31, name: 'Note 31', color: LED_CYAN, pressColor: LED_WHITE},
-    
-    // Row 4: notes 32-39
-    {note: 32, name: 'Note 32', color: LED_YELLOW, pressColor: LED_AMBER},
-    {note: 33, name: 'Note 33', color: LED_YELLOW, pressColor: LED_AMBER},
-    {note: 34, name: 'Note 34', color: LED_YELLOW, pressColor: LED_AMBER},
-    {note: 35, name: 'Note 35', color: LED_YELLOW, pressColor: LED_AMBER},
-    {note: 36, name: 'Note 36', color: LED_PURPLE, pressColor: LED_PINK},
-    {note: 37, name: 'Note 37', color: LED_PURPLE, pressColor: LED_PINK},
-    {note: 38, name: 'Note 38', color: LED_PURPLE, pressColor: LED_PINK},
-    {note: 39, name: 'Note 39', color: LED_PURPLE, pressColor: LED_PINK},
-    
-    // Row 5: notes 40-47
-    {note: 40, name: 'Note 40', color: LED_YELLOW, pressColor: LED_AMBER},
-    {note: 41, name: 'Note 41', color: LED_YELLOW, pressColor: LED_AMBER},
-    {note: 42, name: 'Note 42', color: LED_YELLOW, pressColor: LED_AMBER},
-    {note: 43, name: 'Note 43', color: LED_YELLOW, pressColor: LED_AMBER},
-    {note: 44, name: 'Note 44', color: LED_PURPLE, pressColor: LED_PINK},
-    {note: 45, name: 'Note 45', color: LED_PURPLE, pressColor: LED_PINK},
-    {note: 46, name: 'Note 46', color: LED_PURPLE, pressColor: LED_PINK},
-    {note: 47, name: 'Note 47', color: LED_PURPLE, pressColor: LED_PINK},
-    
-    // Row 6: notes 48-55
-    {note: 48, name: 'Note 48', color: LED_YELLOW, pressColor: LED_AMBER},
-    {note: 49, name: 'Note 49', color: LED_YELLOW, pressColor: LED_AMBER},
-    {note: 50, name: 'Note 50', color: LED_YELLOW, pressColor: LED_AMBER},
-    {note: 51, name: 'Note 51', color: LED_YELLOW, pressColor: LED_AMBER},
-    {note: 52, name: 'Note 52', color: LED_PURPLE, pressColor: LED_PINK},
-    {note: 53, name: 'Note 53', color: LED_PURPLE, pressColor: LED_PINK},
-    {note: 54, name: 'Note 54', color: LED_PURPLE, pressColor: LED_PINK},
-    {note: 55, name: 'Note 55', color: LED_PURPLE, pressColor: LED_PINK},
-    
-    // Row 7 (top): notes 56-63
-    {note: 56, name: 'Note 56', color: LED_YELLOW, pressColor: LED_AMBER},
-    {note: 57, name: 'Note 57', color: LED_YELLOW, pressColor: LED_AMBER},
-    {note: 58, name: 'Note 58', color: LED_YELLOW, pressColor: LED_AMBER},
-    {note: 59, name: 'Note 59', color: LED_YELLOW, pressColor: LED_AMBER},
-    {note: 60, name: 'Note 60', color: LED_PURPLE, pressColor: LED_PINK},
-    {note: 61, name: 'Note 61', color: LED_PURPLE, pressColor: LED_PINK},
-    {note: 62, name: 'Note 62', color: LED_PURPLE, pressColor: LED_PINK},
-    {note: 63, name: 'Note 63', color: LED_PURPLE, pressColor: LED_PINK}
+    {note: 24, name: 'C0', color: LED_RED, pressColor: LED_ORANGE},
+    {note: 25, name: 'C#0', color: LED_RED, pressColor: LED_ORANGE},
+    {note: 26, name: 'D0', color: LED_RED, pressColor: LED_ORANGE},
+    {note: 27, name: 'D#0', color: LED_RED, pressColor: LED_ORANGE},
+    {note: 28, name: 'E0', color: LED_CYAN, pressColor: LED_WHITE},
+    {note: 29, name: 'F0', color: LED_CYAN, pressColor: LED_WHITE},
+    {note: 30, name: 'F#0', color: LED_CYAN, pressColor: LED_WHITE},
+    {note: 31, name: 'G0', color: LED_CYAN, pressColor: LED_WHITE},
+
+    // Row 4: notes 32-39 (PURPLE: C1-D#1 = GA Pad Bank 1, pads 1-4)
+    {note: 32, name: 'G#0', color: LED_YELLOW, pressColor: LED_AMBER},
+    {note: 33, name: 'A0', color: LED_YELLOW, pressColor: LED_AMBER},
+    {note: 34, name: 'A#0', color: LED_YELLOW, pressColor: LED_AMBER},
+    {note: 35, name: 'B0', color: LED_YELLOW, pressColor: LED_AMBER},
+    {note: 36, name: 'C1', color: LED_PURPLE, pressColor: LED_PINK},
+    {note: 37, name: 'C#1', color: LED_PURPLE, pressColor: LED_PINK},
+    {note: 38, name: 'D1', color: LED_PURPLE, pressColor: LED_PINK},
+    {note: 39, name: 'D#1', color: LED_PURPLE, pressColor: LED_PINK},
+
+    // Row 5: notes 40-47 (PURPLE: E1-G1 → remap to E1-G#1 via Input Transformer)
+    {note: 40, name: 'E1', color: LED_YELLOW, pressColor: LED_AMBER},
+    {note: 41, name: 'F1', color: LED_YELLOW, pressColor: LED_AMBER},
+    {note: 42, name: 'F#1', color: LED_YELLOW, pressColor: LED_AMBER},
+    {note: 43, name: 'G1', color: LED_YELLOW, pressColor: LED_AMBER},
+    {note: 44, name: 'G#1', color: LED_PURPLE, pressColor: LED_PINK},
+    {note: 45, name: 'A1', color: LED_PURPLE, pressColor: LED_PINK},
+    {note: 46, name: 'A#1', color: LED_PURPLE, pressColor: LED_PINK},
+    {note: 47, name: 'B1', color: LED_PURPLE, pressColor: LED_PINK},
+
+    // Row 6: notes 48-55 (PURPLE: C2-D#2 → remap to G#1-B1 via Input Transformer)
+    {note: 48, name: 'C2', color: LED_YELLOW, pressColor: LED_AMBER},
+    {note: 49, name: 'C#2', color: LED_YELLOW, pressColor: LED_AMBER},
+    {note: 50, name: 'D2', color: LED_YELLOW, pressColor: LED_AMBER},
+    {note: 51, name: 'D#2', color: LED_YELLOW, pressColor: LED_AMBER},
+    {note: 52, name: 'E2', color: LED_PURPLE, pressColor: LED_PINK},
+    {note: 53, name: 'F2', color: LED_PURPLE, pressColor: LED_PINK},
+    {note: 54, name: 'F#2', color: LED_PURPLE, pressColor: LED_PINK},
+    {note: 55, name: 'G2', color: LED_PURPLE, pressColor: LED_PINK},
+
+    // Row 7 (top): notes 56-63 (PURPLE: G#2-B2 → remap to C2-D#2 via Input Transformer)
+    {note: 56, name: 'G#2', color: LED_YELLOW, pressColor: LED_AMBER},
+    {note: 57, name: 'A2', color: LED_YELLOW, pressColor: LED_AMBER},
+    {note: 58, name: 'A#2', color: LED_YELLOW, pressColor: LED_AMBER},
+    {note: 59, name: 'B2', color: LED_YELLOW, pressColor: LED_AMBER},
+    {note: 60, name: 'C3', color: LED_PURPLE, pressColor: LED_PINK},
+    {note: 61, name: 'C#3', color: LED_PURPLE, pressColor: LED_PINK},
+    {note: 62, name: 'D3', color: LED_PURPLE, pressColor: LED_PINK},
+    {note: 63, name: 'D#3', color: LED_PURPLE, pressColor: LED_PINK}
 ];
 
 // Flag to track which page is active
